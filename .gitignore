@@ -1,0 +1,6 @@
+.idea
+/sdk-core
+/dist/releases
+moddable-tools/
+arm-none-eabi/
+/toolchain*
