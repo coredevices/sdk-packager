@@ -9,7 +9,7 @@ git clone --recurse-submodules https://github.com/coredevices/sdk-packager
 
 # Usage
 
-> Build an sdk
+Build an sdk
 ```shell
 ./pack-sdk.sh $VERSION
 ```
