@@ -38,6 +38,7 @@ configure_and_build_board() {
     bzip2 build/sdk/$platform_name/qemu/qemu_spi_flash.bin
 }
 
+configure_and_build_board "spalding_gabbro" "gabbro"
 configure_and_build_board "silk_flint" "flint"
 configure_and_build_board "snowy_emery" "emery"
 configure_and_build_board "silk_bb2" "diorite"
