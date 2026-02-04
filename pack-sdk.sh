@@ -12,9 +12,6 @@ echo "Building SDK version: $SDK_VERSION"
 
 rm -rf sdk-core
 
-rm -rf toolchain-mac/moddable/
-rm -rf toolchain-linux/moddable/
-
 rm -rf build/
 rm -rf dist/releases/
 
@@ -29,7 +26,7 @@ configure_and_build_board() {
     
     echo "Building for board: $board (platform: $platform_name)"
   
-    ./waf configure --qemu --board $board --release --sdkshell
+    ./waf configure --qemu --board $board --sdkshell
     ./waf build qemu_image_micro qemu_image_spi
     mkdir build/sdk/$platform_name/qemu
     mv build/qemu_micro_flash.bin build/sdk/$platform_name/qemu/
@@ -42,8 +39,8 @@ configure_and_build_board "spalding_gabbro" "gabbro"
 configure_and_build_board "silk_flint" "flint"
 configure_and_build_board "snowy_emery" "emery"
 configure_and_build_board "silk_bb2" "diorite"
-configure_and_build_board "snowy_bb2" "basalt"
 configure_and_build_board "spalding_bb2" "chalk"
+configure_and_build_board "snowy_bb2" "basalt"
 
 cd -
 mkdir sdk-core
@@ -74,8 +71,14 @@ mkdir dist/releases/
 mkdir dist/releases/$SDK_VERSION
 mv sdk-core.tar.gz dist/releases/$SDK_VERSION
 
-tar -cvzSf toolchain-mac.tar.gz toolchain-mac
-mv toolchain-mac.tar.gz dist/releases/$SDK_VERSION/
+tar -cvzSf toolchain-mac-x86_64.tar.gz toolchain-mac-x86_64
+mv toolchain-mac-x86_64.tar.gz dist/releases/$SDK_VERSION/
 
-tar -cvzSf toolchain-linux.tar.gz toolchain-linux
-mv toolchain-linux.tar.gz dist/releases/$SDK_VERSION/
+tar -cvzSf toolchain-mac-arm64.tar.gz toolchain-mac-arm64
+mv toolchain-mac-arm64.tar.gz dist/releases/$SDK_VERSION/
+
+tar -cvzSf toolchain-linux-x86_64.tar.gz toolchain-linux-x86_64
+mv toolchain-linux-x86_64.tar.gz dist/releases/$SDK_VERSION/
+
+tar -cvzSf toolchain-linux-aarch64.tar.gz toolchain-linux-aarch64
+mv toolchain-linux-aarch64.tar.gz dist/releases/$SDK_VERSION/
