@@ -5,6 +5,12 @@ set -e
 VERSION="${1:-14.2.1-1.1}"
 echo "Using arm-none-eabi-gcc version: $VERSION"
 
+# Moddable SDK version for fontbm
+# Note: lin64 uses 5.7.0 because fontbm was apparently dropped from lin64 builds after that version
+MODDABLE_VERSION="${2:-7.1.0}"
+MODDABLE_VERSION_LIN64="5.7.0"
+echo "Using Moddable SDK version: $MODDABLE_VERSION (lin64: $MODDABLE_VERSION_LIN64)"
+
 XPACK_BASE_URL="https://github.com/xpack-dev-tools/arm-none-eabi-gcc-xpack/releases/download/v${VERSION}"
 LINUX_X86_64_FILE="xpack-arm-none-eabi-gcc-${VERSION}-linux-x64.tar.gz"
 LINUX_AARCH64_FILE="xpack-arm-none-eabi-gcc-${VERSION}-linux-arm64.tar.gz"
@@ -113,4 +119,32 @@ mv "$TEMP_DIR/qemu-mac-arm64/qemu-system-arm" toolchain-mac-arm64/bin/qemu-pebbl
 mv "$TEMP_DIR/lib-mac-arm64"/* toolchain-mac-arm64/lib/
 
 echo ""
-echo "Done! Toolchains and QEMU downloaded for all platforms."
+echo "Downloading fontbm from Moddable SDK..."
+
+MODDABLE_BASE_URL="https://github.com/Moddable-OpenSource/moddable/releases/download/${MODDABLE_VERSION}"
+MODDABLE_BASE_URL_LIN64="https://github.com/Moddable-OpenSource/moddable/releases/download/${MODDABLE_VERSION_LIN64}"
+
+# Download and extract fontbm for each platform
+# lin64 uses an older Moddable version because fontbm was dropped from lin64 builds after 5.7.0
+for platform_pair in \
+    "moddable-tools-lin64.zip:toolchain-linux-x86_64:${MODDABLE_BASE_URL_LIN64}" \
+    "moddable-tools-lin64arm.zip:toolchain-linux-aarch64:${MODDABLE_BASE_URL}" \
+    "moddable-tools-mac64.zip:toolchain-mac-x86_64:${MODDABLE_BASE_URL}" \
+    "moddable-tools-mac64arm.zip:toolchain-mac-arm64:${MODDABLE_BASE_URL}"; do
+
+    archive="${platform_pair%%:*}"
+    rest="${platform_pair#*:}"
+    toolchain_dir="${rest%%:*}"
+    base_url="${rest#*:}"
+
+    echo "Downloading ${archive}..."
+    curl -L -o "$TEMP_DIR/$archive" "$base_url/$archive"
+
+    mkdir -p "$toolchain_dir/bin"
+    unzip -o -j "$TEMP_DIR/$archive" fontbm -d "$toolchain_dir/bin"
+    chmod +x "$toolchain_dir/bin/fontbm"
+    echo "Installed fontbm to $toolchain_dir/bin/"
+done
+
+echo ""
+echo "Done! Toolchains, QEMU, and fontbm downloaded for all platforms."

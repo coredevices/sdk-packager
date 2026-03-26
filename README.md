@@ -7,11 +7,17 @@ A packager to generate the sdk tar.gz files that go on Cloudflare.
 git clone --recurse-submodules https://github.com/coredevices/sdk-packager
 ```
 
+#### Download the toolchains
+
+```shell
+./download-toolchain.sh
+```
+
 # Usage
 
 Build an sdk
 ```shell
-./pack-sdk.sh $VERSION
+./pack-sdk-moddable.sh $VERSION
 ```
 
 Run locally

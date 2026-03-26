@@ -1,3 +1,7 @@
 [submodule "sdk-core-4.4"]
 	path = sdk-core-4.4
 	url = https://github.com/coredevices/sdk-core.git
+[submodule "moddable"]
+	path = moddable
+	url = https://github.com/Moddable-OpenSource/moddable.git
+	branch = pebble

@@ -32,6 +32,7 @@ configure_and_build_board() {
     mv build/qemu_micro_flash.bin build/sdk/$platform_name/qemu/
     mv build/qemu_spi_flash.bin build/sdk/$platform_name/qemu/
     mv build/src/fw/tintin_fw.elf build/sdk/$platform_name/qemu/"$platform_name"_sdk_debug.elf
+    mv build/resources/layouts.json.auto build/sdk/$platform_name/qemu/layouts.json
     bzip2 build/sdk/$platform_name/qemu/qemu_spi_flash.bin
 }
 

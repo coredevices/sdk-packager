@@ -1,0 +1,38 @@
+FROM ubuntu:22.04
+
+# Prevent interactive prompts during package installation
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install required packages
+RUN apt-get update && apt-get install -y \
+    gcc \
+    git \
+    wget \
+    make \
+    libncurses-dev \
+    flex \
+    bison \
+    gperf \
+    libgtk-3-dev \
+    sudo \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create Projects directory
+RUN mkdir -p ~/Projects
+
+# Copy the local moddable folder into the container
+COPY moddable /root/Projects/moddable
+
+# Set environment variables
+ENV MODDABLE=/root/Projects/moddable
+ENV PATH=$PATH:$MODDABLE/build/bin/lin/release
+
+# Build the Moddable command line tools, simulator, and debugger
+WORKDIR $MODDABLE/build/makefiles/lin
+RUN make
+
+# Set the working directory
+WORKDIR /root/Projects/moddable
+
+# Copy the built binaries to /output volume
+CMD ["sh", "-c", "cp -r $MODDABLE/build/bin/lin/release /output/toolchain-linux/moddable-tools"]
