@@ -36,7 +36,7 @@ configure_and_build_board() {
 
     echo "Building for board: $board (platform: $platform_name, js_engine: $js_engine)"
 
-    ./waf configure --qemu --board $board --sdkshell --js-engine $js_engine
+    ./waf configure --board $board --sdkshell --js-engine $js_engine
     ./waf build qemu_image_micro qemu_image_spi
     mkdir build/sdk/$platform_name/qemu
     # Ship the firmware ELF as qemu_micro_flash.bin so pebble-tool's -kernel
