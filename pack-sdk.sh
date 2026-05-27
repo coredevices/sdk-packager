@@ -1,33 +1,74 @@
 set -e
 
-# Check if SDK version argument is provided
+usage() {
+    cat <<EOF
+Usage: $0 [options] <sdk-version>
+
+Options:
+  -t, --targets <list>   Comma-separated targets to pack (default: all).
+                         Valid: linux-x86_64, linux-aarch64,
+                                mac-x86_64, mac-arm64
+  -h, --help             Show this message.
+
+Example: $0 4.9
+         $0 -t linux-x86_64,mac-arm64 4.9
+EOF
+}
+
+TARGETS_ARG=""
+POSITIONAL=()
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --targets|-t) TARGETS_ARG="$2"; shift 2 ;;
+        --targets=*) TARGETS_ARG="${1#*=}"; shift ;;
+        --help|-h) usage; exit 0 ;;
+        --) shift; while [ $# -gt 0 ]; do POSITIONAL+=("$1"); shift; done ;;
+        *) POSITIONAL+=("$1"); shift ;;
+    esac
+done
+set -- "${POSITIONAL[@]}"
+
 if [ -z "$1" ]; then
-    echo "Usage: $0 <sdk-version>"
-    echo "Example: $0 4.9"
+    usage >&2
     exit 1
 fi
 
 SDK_VERSION="$1"
+
+ALL_TARGETS=(linux-x86_64 linux-aarch64 mac-x86_64 mac-arm64)
+if [ -z "$TARGETS_ARG" ]; then
+    TARGETS=("${ALL_TARGETS[@]}")
+else
+    IFS=',' read -r -a TARGETS <<< "$TARGETS_ARG"
+    for t in "${TARGETS[@]}"; do
+        case " ${ALL_TARGETS[*]} " in
+            *" $t "*) ;;
+            *) echo "Unknown target: $t (valid: ${ALL_TARGETS[*]})" >&2; exit 1 ;;
+        esac
+    done
+fi
+
 echo "Building SDK version: $SDK_VERSION"
+echo "Targets: ${TARGETS[*]}"
 
 rm -rf sdk-core
 
-rm -rf toolchain-mac-x86_64/moddable/
-rm -rf toolchain-mac-arm64/moddable/
-rm -rf toolchain-linux-x86_64/moddable/
-rm -rf toolchain-linux-aarch64/moddable/
+for target in "${TARGETS[@]}"; do
+    rm -rf "toolchain-$target/moddable/"
+done
 
 rm -rf moddable/documentation
 
 rm -rf build/
 rm -rf dist/releases/
 
-cp -r moddable toolchain-mac-x86_64/moddable
-cp -r moddable toolchain-mac-arm64/moddable
-cp -r moddable toolchain-linux-x86_64/moddable
-cp -r moddable toolchain-linux-aarch64/moddable
+for target in "${TARGETS[@]}"; do
+    cp -r moddable "toolchain-$target/moddable"
+done
 
-PEBBLEOS_PATH=~/Core/pebbleos
+if [ -z "${PEBBLEOS_PATH}" ]; then
+    PEBBLEOS_PATH='~/Core/pebbleos'
+fi
 
 configure_and_build_board() {
     local board=$1
@@ -36,7 +77,7 @@ configure_and_build_board() {
 
     echo "Building for board: $board (platform: $platform_name, js_engine: $js_engine)"
 
-    ./waf configure --board $board --sdkshell --js-engine $js_engine
+    JS_ENGINE=$js_engine ./waf configure --board $board --sdkshell
     ./waf build qemu_image_micro qemu_image_spi
     mkdir build/sdk/$platform_name/qemu
     # Ship the firmware ELF as qemu_micro_flash.bin so pebble-tool's -kernel
@@ -97,14 +138,7 @@ mkdir dist/releases/
 mkdir dist/releases/$SDK_VERSION
 mv sdk-core.tar.gz dist/releases/$SDK_VERSION
 
-tar -cvzSf toolchain-mac-x86_64.tar.gz toolchain-mac-x86_64
-mv toolchain-mac-x86_64.tar.gz dist/releases/$SDK_VERSION/
-
-tar -cvzSf toolchain-mac-arm64.tar.gz toolchain-mac-arm64
-mv toolchain-mac-arm64.tar.gz dist/releases/$SDK_VERSION/
-
-tar -cvzSf toolchain-linux-x86_64.tar.gz toolchain-linux-x86_64
-mv toolchain-linux-x86_64.tar.gz dist/releases/$SDK_VERSION/
-
-tar -cvzSf toolchain-linux-aarch64.tar.gz toolchain-linux-aarch64
-mv toolchain-linux-aarch64.tar.gz dist/releases/$SDK_VERSION/
+for target in "${TARGETS[@]}"; do
+    tar -cvzSf "toolchain-$target.tar.gz" "toolchain-$target"
+    mv "toolchain-$target.tar.gz" "dist/releases/$SDK_VERSION/"
+done

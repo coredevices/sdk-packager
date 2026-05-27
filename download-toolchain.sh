@@ -1,55 +1,128 @@
 #!/bin/bash
 set -e
 
-# Parse flags. --build-moddable-tools / -b builds moddable-tools from the
-# moddable submodule instead of downloading the prebuilt archives. Positional
-# args (xpack version, moddable version) keep their previous meaning.
+usage() {
+    cat <<EOF
+Usage: $0 [options] [xpack-version] [moddable-version]
+
+Options:
+  -b, --build-moddable-tools   Build moddable-tools from ./moddable submodule
+                               instead of downloading prebuilt archives.
+  -t, --targets <list>         Comma-separated targets to build (default: all).
+                               Valid: linux-x86_64, linux-aarch64,
+                                      mac-x86_64, mac-arm64
+  -f, --force-download         Re-download cached archives even if present.
+  -h, --help                   Show this message.
+
+Downloaded archives are cached under .cache/download-toolchain/ keyed by
+version, so re-running is cheap.
+EOF
+}
+
 BUILD_MODDABLE_TOOLS=0
+FORCE_DOWNLOAD=0
+TARGETS_ARG=""
 POSITIONAL=()
 while [ $# -gt 0 ]; do
     case "$1" in
-        --build-moddable-tools|-b)
-            BUILD_MODDABLE_TOOLS=1
-            shift
-            ;;
-        --)
-            shift
-            while [ $# -gt 0 ]; do POSITIONAL+=("$1"); shift; done
-            ;;
-        *)
-            POSITIONAL+=("$1")
-            shift
-            ;;
+        --build-moddable-tools|-b) BUILD_MODDABLE_TOOLS=1; shift ;;
+        --targets|-t) TARGETS_ARG="$2"; shift 2 ;;
+        --targets=*) TARGETS_ARG="${1#*=}"; shift ;;
+        --force-download|-f) FORCE_DOWNLOAD=1; shift ;;
+        --help|-h) usage; exit 0 ;;
+        --) shift; while [ $# -gt 0 ]; do POSITIONAL+=("$1"); shift; done ;;
+        *) POSITIONAL+=("$1"); shift ;;
     esac
 done
 set -- "${POSITIONAL[@]}"
 
-# xpack arm-none-eabi-gcc version to download
-VERSION="${1:-14.2.1-1.1}"
-echo "Using arm-none-eabi-gcc version: $VERSION"
+ALL_TARGETS=(linux-x86_64 linux-aarch64 mac-x86_64 mac-arm64)
+if [ -z "$TARGETS_ARG" ]; then
+    TARGETS=("${ALL_TARGETS[@]}")
+else
+    IFS=',' read -r -a TARGETS <<< "$TARGETS_ARG"
+    for t in "${TARGETS[@]}"; do
+        case " ${ALL_TARGETS[*]} " in
+            *" $t "*) ;;
+            *) echo "Unknown target: $t (valid: ${ALL_TARGETS[*]})" >&2; exit 1 ;;
+        esac
+    done
+fi
 
-# Moddable SDK version for moddable-tools
-# Note: lin64 pulls the full tools bundle from $MODDABLE_VERSION, but overlays fontbm
-# from $MODDABLE_VERSION_LIN64 because fontbm was dropped from lin64 builds after that version.
+VERSION="${1:-14.2.1-1.1}"
+# lin64 pulls the full tools bundle from $MODDABLE_VERSION, but overlays fontbm
+# from $MODDABLE_VERSION_LIN64 because fontbm was dropped from lin64 builds
+# after that version.
 MODDABLE_VERSION="${2:-8.1.1}"
 MODDABLE_VERSION_LIN64="5.7.0"
-echo "Using Moddable SDK version: $MODDABLE_VERSION (lin64 fontbm overlay: $MODDABLE_VERSION_LIN64)"
-if [ "$BUILD_MODDABLE_TOOLS" -eq 1 ]; then
-    echo "Build mode: building moddable-tools from ./moddable (fontbm still pulled from GitHub)"
-fi
+
+echo "Targets: ${TARGETS[*]}"
+echo "xpack arm-none-eabi-gcc: $VERSION"
+echo "Moddable SDK: $MODDABLE_VERSION (lin64 fontbm overlay: $MODDABLE_VERSION_LIN64)"
+[ "$BUILD_MODDABLE_TOOLS" -eq 1 ] && echo "Build mode: building moddable-tools from ./moddable"
 
 MODDABLE_BASE_URL="https://github.com/Moddable-OpenSource/moddable/releases/download/${MODDABLE_VERSION}"
 MODDABLE_BASE_URL_LIN64_OLD="https://github.com/Moddable-OpenSource/moddable/releases/download/${MODDABLE_VERSION_LIN64}"
-
 XPACK_BASE_URL="https://github.com/xpack-dev-tools/arm-none-eabi-gcc-xpack/releases/download/v${VERSION}"
-LINUX_X86_64_FILE="xpack-arm-none-eabi-gcc-${VERSION}-linux-x64.tar.gz"
-LINUX_AARCH64_FILE="xpack-arm-none-eabi-gcc-${VERSION}-linux-arm64.tar.gz"
-MAC_X86_64_FILE="xpack-arm-none-eabi-gcc-${VERSION}-darwin-x64.tar.gz"
-MAC_ARM64_FILE="xpack-arm-none-eabi-gcc-${VERSION}-darwin-arm64.tar.gz"
 
-# Create temp directory for downloads
-TEMP_DIR=$(mktemp -d)
-trap "rm -rf $TEMP_DIR" EXIT
+CACHE_DIR=".cache/download-toolchain"
+mkdir -p "$CACHE_DIR"
+
+declare -A XPACK_SUFFIX=(
+    [linux-x86_64]=linux-x64
+    [linux-aarch64]=linux-arm64
+    [mac-x86_64]=darwin-x64
+    [mac-arm64]=darwin-arm64
+)
+declare -A MODDABLE_ZIP=(
+    [linux-x86_64]=moddable-tools-lin64.zip
+    [linux-aarch64]=moddable-tools-lin64arm.zip
+    [mac-x86_64]=moddable-tools-mac64.zip
+    [mac-arm64]=moddable-tools-mac64arm.zip
+)
+declare -A QEMU_ASSET=(
+    [linux-x86_64]=qemu-pebble-linux-x86_64.tar.gz
+    [linux-aarch64]=qemu-pebble-linux-arm64.tar.gz
+    [mac-x86_64]=qemu-pebble-macos-x86_64.tar.gz
+    [mac-arm64]=qemu-pebble-macos-arm64.tar.gz
+)
+declare -A DOCKER_PLATFORM=(
+    [linux-x86_64]=linux/amd64
+    [linux-aarch64]=linux/arm64
+)
+
+target_includes() {
+    local t
+    for t in "${TARGETS[@]}"; do [ "$t" = "$1" ] && return 0; done
+    return 1
+}
+
+# Persistent cache: skip if file exists and non-empty unless --force-download.
+download_cached() {
+    local url="$1"
+    local rel="$2"
+    local dest="$CACHE_DIR/$rel"
+    mkdir -p "$(dirname "$dest")"
+    if [ "$FORCE_DOWNLOAD" -eq 0 ] && [ -s "$dest" ]; then
+        echo "Cached: $rel"
+        return
+    fi
+    echo "Downloading $rel..."
+    curl -L --fail -o "$dest.tmp" "$url"
+    mv "$dest.tmp" "$dest"
+}
+
+gh_download_cached() {
+    local repo="$1" tag="$2" pattern="$3" rel_dir="$4"
+    local dest="$CACHE_DIR/$rel_dir/$pattern"
+    mkdir -p "$CACHE_DIR/$rel_dir"
+    if [ "$FORCE_DOWNLOAD" -eq 0 ] && [ -s "$dest" ]; then
+        echo "Cached: $rel_dir/$pattern"
+        return
+    fi
+    echo "Downloading $pattern (from $repo $tag)..."
+    gh release download "$tag" --repo "$repo" --pattern "$pattern" --dir "$CACHE_DIR/$rel_dir" --clobber
+}
 
 # Trim an extracted xpack arm-none-eabi toolchain in-place to drop multilib
 # variants and tools pebbleos doesn't use. See README for the rationale.
@@ -96,171 +169,120 @@ trim_arm_toolchain() {
     rm -f "$root/bin/arm-none-eabi-lto-dump"
 }
 
-echo "Downloading toolchains..."
-
-# Download Linux x86_64 version
-echo "Downloading Linux x86_64 toolchain..."
-curl -L -o "$TEMP_DIR/$LINUX_X86_64_FILE" "$XPACK_BASE_URL/$LINUX_X86_64_FILE"
-
-# Download Linux aarch64 version
-echo "Downloading Linux aarch64 toolchain..."
-curl -L -o "$TEMP_DIR/$LINUX_AARCH64_FILE" "$XPACK_BASE_URL/$LINUX_AARCH64_FILE"
-
-# Download macOS x86_64 version
-echo "Downloading macOS x86_64 toolchain..."
-curl -L -o "$TEMP_DIR/$MAC_X86_64_FILE" "$XPACK_BASE_URL/$MAC_X86_64_FILE"
-
-# Download macOS arm64 version
-echo "Downloading macOS arm64 toolchain..."
-curl -L -o "$TEMP_DIR/$MAC_ARM64_FILE" "$XPACK_BASE_URL/$MAC_ARM64_FILE"
-
-# Clean up existing toolchain directories
-rm -rf toolchain-linux-x86_64/arm-none-eabi
-rm -rf toolchain-linux-aarch64/arm-none-eabi
-rm -rf toolchain-mac-x86_64/arm-none-eabi
-rm -rf toolchain-mac-arm64/arm-none-eabi
-
-# Create toolchain directories if they don't exist
-mkdir -p toolchain-linux-x86_64
-mkdir -p toolchain-linux-aarch64
-mkdir -p toolchain-mac-x86_64
-mkdir -p toolchain-mac-arm64
-
-# Extract Linux x86_64 toolchain
-echo "Extracting Linux x86_64 toolchain..."
-tar -xzf "$TEMP_DIR/$LINUX_X86_64_FILE" -C "$TEMP_DIR"
-mv "$TEMP_DIR/xpack-arm-none-eabi-gcc-${VERSION}" toolchain-linux-x86_64/arm-none-eabi
-trim_arm_toolchain toolchain-linux-x86_64/arm-none-eabi
-
-# Extract Linux aarch64 toolchain
-echo "Extracting Linux aarch64 toolchain..."
-tar -xzf "$TEMP_DIR/$LINUX_AARCH64_FILE" -C "$TEMP_DIR"
-mv "$TEMP_DIR/xpack-arm-none-eabi-gcc-${VERSION}" toolchain-linux-aarch64/arm-none-eabi
-trim_arm_toolchain toolchain-linux-aarch64/arm-none-eabi
-
-# Extract macOS x86_64 toolchain
-echo "Extracting macOS x86_64 toolchain..."
-tar -xzf "$TEMP_DIR/$MAC_X86_64_FILE" -C "$TEMP_DIR"
-mv "$TEMP_DIR/xpack-arm-none-eabi-gcc-${VERSION}" toolchain-mac-x86_64/arm-none-eabi
-trim_arm_toolchain toolchain-mac-x86_64/arm-none-eabi
-
-# Extract macOS arm64 toolchain
-echo "Extracting macOS arm64 toolchain..."
-tar -xzf "$TEMP_DIR/$MAC_ARM64_FILE" -C "$TEMP_DIR"
-mv "$TEMP_DIR/xpack-arm-none-eabi-gcc-${VERSION}" toolchain-mac-arm64/arm-none-eabi
-trim_arm_toolchain toolchain-mac-arm64/arm-none-eabi
-
 echo ""
-echo "Downloading QEMU from latest GitHub release..."
+echo "=== arm-none-eabi-gcc toolchain ==="
+for target in "${TARGETS[@]}"; do
+    file="xpack-arm-none-eabi-gcc-${VERSION}-${XPACK_SUFFIX[$target]}.tar.gz"
+    download_cached "$XPACK_BASE_URL/$file" "xpack/$VERSION/$file"
 
-QEMU_RELEASE_TAG=$(gh release view --repo coredevices/qemu --json tagName --jq '.tagName')
-echo "Using QEMU release: $QEMU_RELEASE_TAG"
+    dir="toolchain-$target"
+    rm -rf "$dir/arm-none-eabi"
+    mkdir -p "$dir"
 
-for qemu_pair in \
-    "qemu-pebble-linux-x86_64.tar.gz:toolchain-linux-x86_64" \
-    "qemu-pebble-linux-arm64.tar.gz:toolchain-linux-aarch64" \
-    "qemu-pebble-macos-x86_64.tar.gz:toolchain-mac-x86_64" \
-    "qemu-pebble-macos-arm64.tar.gz:toolchain-mac-arm64"; do
-
-    asset="${qemu_pair%%:*}"
-    toolchain_dir="${qemu_pair##*:}"
-
-    echo "Downloading ${asset}..."
-    gh release download "$QEMU_RELEASE_TAG" --repo coredevices/qemu --pattern "$asset" --dir "$TEMP_DIR" --clobber
-    mkdir -p "$toolchain_dir"
-    tar -xzf "$TEMP_DIR/$asset" -C "$toolchain_dir"
-    chmod +x "$toolchain_dir/bin/qemu-pebble"
-    echo "Installed qemu-pebble to $toolchain_dir/bin/"
+    extract_tmp=$(mktemp -d)
+    tar --no-same-owner -xzf "$CACHE_DIR/xpack/$VERSION/$file" -C "$extract_tmp"
+    mv "$extract_tmp/xpack-arm-none-eabi-gcc-${VERSION}" "$dir/arm-none-eabi"
+    rm -rf "$extract_tmp"
+    trim_arm_toolchain "$dir/arm-none-eabi"
+    echo "Installed arm-none-eabi to $dir/arm-none-eabi/"
 done
 
 echo ""
-if [ "$BUILD_MODDABLE_TOOLS" -eq 1 ]; then
-    echo "Building moddable-tools from ./moddable..."
+echo "=== QEMU ==="
+QEMU_RELEASE_TAG=$(gh release view --repo coredevices/qemu --json tagName --jq '.tagName')
+echo "Using QEMU release: $QEMU_RELEASE_TAG"
+for target in "${TARGETS[@]}"; do
+    asset="${QEMU_ASSET[$target]}"
+    gh_download_cached coredevices/qemu "$QEMU_RELEASE_TAG" "$asset" "qemu/$QEMU_RELEASE_TAG"
 
+    dir="toolchain-$target"
+    mkdir -p "$dir"
+    tar --no-same-owner -xzf "$CACHE_DIR/qemu/$QEMU_RELEASE_TAG/$asset" -C "$dir"
+    chmod +x "$dir/bin/qemu-pebble"
+    echo "Installed qemu-pebble to $dir/bin/"
+done
+
+echo ""
+echo "=== moddable-tools ==="
+if [ "$BUILD_MODDABLE_TOOLS" -eq 1 ]; then
     if [ ! -d "moddable/build/makefiles" ]; then
-        echo "Error: moddable submodule not initialized (moddable/build/makefiles missing)."
-        echo "Run: git submodule update --init --recursive"
+        echo "Error: moddable submodule not initialized (moddable/build/makefiles missing)." >&2
+        echo "Run: git submodule update --init --recursive" >&2
         exit 1
     fi
 
-    # Linux x86_64 via Docker
-    echo "Building linux x86_64 moddable-tools (docker)..."
-    docker build --platform linux/amd64 -f Dockerfile-moddable-tools -t moddable-pebble-amd64 .
-    rm -rf toolchain-linux-x86_64/moddable-tools
-    docker run --rm --platform linux/amd64 -v "$(pwd):/output" moddable-pebble-amd64 \
-        sh -c 'cp -r $MODDABLE/build/bin/lin/release /output/toolchain-linux-x86_64/moddable-tools'
+    for target in "${TARGETS[@]}"; do
+        case "$target" in
+            linux-*)
+                platform="${DOCKER_PLATFORM[$target]}"
+                tag="moddable-pebble-$target"
+                echo "Building $target moddable-tools (docker $platform)..."
+                docker build --platform "$platform" -f Dockerfile-moddable-tools -t "$tag" .
+                rm -rf "toolchain-$target/moddable-tools"
+                docker run --rm --platform "$platform" -v "$(pwd):/output" "$tag" \
+                    sh -c "cp -r \$MODDABLE/build/bin/lin/release /output/toolchain-$target/moddable-tools && chown -R $(id -u):$(id -g) /output/toolchain-$target/moddable-tools"
+                ;;
+        esac
+    done
 
-    # Linux aarch64 via Docker
-    echo "Building linux aarch64 moddable-tools (docker)..."
-    docker build --platform linux/arm64 -f Dockerfile-moddable-tools -t moddable-pebble-arm64 .
-    rm -rf toolchain-linux-aarch64/moddable-tools
-    docker run --rm --platform linux/arm64 -v "$(pwd):/output" moddable-pebble-arm64 \
-        sh -c 'cp -r $MODDABLE/build/bin/lin/release /output/toolchain-linux-aarch64/moddable-tools'
+    if target_includes mac-x86_64 || target_includes mac-arm64; then
+        echo "Building mac universal moddable-tools (native)..."
+        (
+            export MODDABLE="$(pwd)/moddable"
+            export PATH="${MODDABLE}/build/bin/mac/release:$PATH"
+            export PLAT=macuniversal
+            export MACOS_ARCH="-arch x86_64 -arch arm64"
+            cd "${MODDABLE}/build/makefiles/mac"
+            make
+        )
+        for target in mac-x86_64 mac-arm64; do
+            if target_includes "$target"; then
+                rm -rf "toolchain-$target/moddable-tools"
+                cp -r "$(pwd)/moddable/build/bin/mac/release" "toolchain-$target/moddable-tools"
+            fi
+        done
+    fi
 
-    # macOS universal binary, fanned out to both arch dirs
-    echo "Building mac universal moddable-tools (native)..."
-    (
-        export MODDABLE="$(pwd)/moddable"
-        export PATH="${MODDABLE}/build/bin/mac/release:$PATH"
-        export PLAT=macuniversal
-        export MACOS_ARCH="-arch x86_64 -arch arm64"
-        cd "${MODDABLE}/build/makefiles/mac"
-        make
-    )
-    rm -rf toolchain-mac-x86_64/moddable-tools toolchain-mac-arm64/moddable-tools
-    cp -r "$(pwd)/moddable/build/bin/mac/release" toolchain-mac-x86_64/moddable-tools
-    cp -r "$(pwd)/moddable/build/bin/mac/release" toolchain-mac-arm64/moddable-tools
-
-    # Source builds don't produce fontbm — overlay it from the Moddable SDK
-    # release archives for every platform except lin64 (handled below from
-    # the older release).
-    for fontbm_pair in \
-        "moddable-tools-lin64arm.zip:toolchain-linux-aarch64" \
-        "moddable-tools-mac64.zip:toolchain-mac-x86_64" \
-        "moddable-tools-mac64arm.zip:toolchain-mac-arm64"; do
-
-        archive="${fontbm_pair%%:*}"
-        toolchain_dir="${fontbm_pair##*:}"
-
-        echo "Overlaying fontbm into $toolchain_dir/moddable-tools from $archive..."
-        curl -L -o "$TEMP_DIR/$archive" "$MODDABLE_BASE_URL/$archive"
-        unzip -o -j "$TEMP_DIR/$archive" fontbm -d "$toolchain_dir/moddable-tools"
-        chmod +x "$toolchain_dir/moddable-tools/fontbm"
+    # Source builds don't produce fontbm — overlay it from prebuilt archives.
+    # lin64 uses MODDABLE_VERSION_LIN64 because newer lin64 builds dropped fontbm.
+    for target in "${TARGETS[@]}"; do
+        if [ "$target" = "linux-x86_64" ]; then
+            overlay_zip="moddable-tools-lin64.zip"
+            overlay_url="$MODDABLE_BASE_URL_LIN64_OLD/$overlay_zip"
+            overlay_rel="moddable/$MODDABLE_VERSION_LIN64/$overlay_zip"
+        else
+            overlay_zip="${MODDABLE_ZIP[$target]}"
+            overlay_url="$MODDABLE_BASE_URL/$overlay_zip"
+            overlay_rel="moddable/$MODDABLE_VERSION/$overlay_zip"
+        fi
+        download_cached "$overlay_url" "$overlay_rel"
+        echo "Overlaying fontbm into toolchain-$target/moddable-tools..."
+        unzip -o -j "$CACHE_DIR/$overlay_rel" fontbm -d "toolchain-$target/moddable-tools"
+        chmod +x "toolchain-$target/moddable-tools/fontbm"
     done
 else
-    echo "Downloading moddable-tools from Moddable SDK..."
+    for target in "${TARGETS[@]}"; do
+        zip="${MODDABLE_ZIP[$target]}"
+        download_cached "$MODDABLE_BASE_URL/$zip" "moddable/$MODDABLE_VERSION/$zip"
 
-    # Download and extract the full moddable-tools zip for each platform
-    for platform_pair in \
-        "moddable-tools-lin64.zip:toolchain-linux-x86_64" \
-        "moddable-tools-lin64arm.zip:toolchain-linux-aarch64" \
-        "moddable-tools-mac64.zip:toolchain-mac-x86_64" \
-        "moddable-tools-mac64arm.zip:toolchain-mac-arm64"; do
-
-        archive="${platform_pair%%:*}"
-        toolchain_dir="${platform_pair##*:}"
-
-        echo "Downloading ${archive}..."
-        curl -L -o "$TEMP_DIR/$archive" "$MODDABLE_BASE_URL/$archive"
-
-        rm -rf "$toolchain_dir/moddable-tools"
-        mkdir -p "$toolchain_dir/moddable-tools"
-        unzip -o "$TEMP_DIR/$archive" -d "$toolchain_dir/moddable-tools"
-        find "$toolchain_dir/moddable-tools" -type f -exec chmod +x {} \;
-        echo "Installed moddable-tools to $toolchain_dir/moddable-tools/"
+        dir="toolchain-$target/moddable-tools"
+        rm -rf "$dir"
+        mkdir -p "$dir"
+        unzip -o "$CACHE_DIR/moddable/$MODDABLE_VERSION/$zip" -d "$dir"
+        find "$dir" -type f -exec chmod +x {} \;
+        echo "Installed moddable-tools to $dir/"
     done
-fi
 
-# fontbm was dropped from lin64 builds after 5.7.0, so overlay fontbm from the older release
-echo "Overlaying lin64 fontbm from Moddable SDK ${MODDABLE_VERSION_LIN64}..."
-curl -L -o "$TEMP_DIR/moddable-tools-lin64-old.zip" "$MODDABLE_BASE_URL_LIN64_OLD/moddable-tools-lin64.zip"
-unzip -o -j "$TEMP_DIR/moddable-tools-lin64-old.zip" fontbm -d "toolchain-linux-x86_64/moddable-tools"
-chmod +x "toolchain-linux-x86_64/moddable-tools/fontbm"
-echo "Installed fontbm to toolchain-linux-x86_64/moddable-tools/"
+    # fontbm was dropped from lin64 builds after 5.7.0 — overlay from the older release.
+    if target_includes linux-x86_64; then
+        overlay_zip="moddable-tools-lin64.zip"
+        overlay_rel="moddable/$MODDABLE_VERSION_LIN64/$overlay_zip"
+        download_cached "$MODDABLE_BASE_URL_LIN64_OLD/$overlay_zip" "$overlay_rel"
+        echo "Overlaying lin64 fontbm from Moddable SDK ${MODDABLE_VERSION_LIN64}..."
+        unzip -o -j "$CACHE_DIR/$overlay_rel" fontbm -d "toolchain-linux-x86_64/moddable-tools"
+        chmod +x "toolchain-linux-x86_64/moddable-tools/fontbm"
+    fi
+fi
 
 echo ""
-if [ "$BUILD_MODDABLE_TOOLS" -eq 1 ]; then
-    echo "Done! Toolchains and QEMU downloaded, moddable-tools built from source, for all platforms."
-else
-    echo "Done! Toolchains, QEMU, and moddable-tools downloaded for all platforms."
-fi
+echo "Done! Targets installed: ${TARGETS[*]}"
