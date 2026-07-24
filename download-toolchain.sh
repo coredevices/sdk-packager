@@ -31,7 +31,7 @@ echo "Using arm-none-eabi-gcc version: $VERSION"
 # Moddable SDK version for moddable-tools
 # Note: lin64 pulls the full tools bundle from $MODDABLE_VERSION, but overlays fontbm
 # from $MODDABLE_VERSION_LIN64 because fontbm was dropped from lin64 builds after that version.
-MODDABLE_VERSION="${2:-8.1.1}"
+MODDABLE_VERSION="${2:-8.2.0}"
 MODDABLE_VERSION_LIN64="5.7.0"
 echo "Using Moddable SDK version: $MODDABLE_VERSION (lin64 fontbm overlay: $MODDABLE_VERSION_LIN64)"
 if [ "$BUILD_MODDABLE_TOOLS" -eq 1 ]; then
@@ -100,19 +100,19 @@ echo "Downloading toolchains..."
 
 # Download Linux x86_64 version
 echo "Downloading Linux x86_64 toolchain..."
-curl -L -o "$TEMP_DIR/$LINUX_X86_64_FILE" "$XPACK_BASE_URL/$LINUX_X86_64_FILE"
+curl -fL --retry 5 --retry-all-errors -o "$TEMP_DIR/$LINUX_X86_64_FILE" "$XPACK_BASE_URL/$LINUX_X86_64_FILE"
 
 # Download Linux aarch64 version
 echo "Downloading Linux aarch64 toolchain..."
-curl -L -o "$TEMP_DIR/$LINUX_AARCH64_FILE" "$XPACK_BASE_URL/$LINUX_AARCH64_FILE"
+curl -fL --retry 5 --retry-all-errors -o "$TEMP_DIR/$LINUX_AARCH64_FILE" "$XPACK_BASE_URL/$LINUX_AARCH64_FILE"
 
 # Download macOS x86_64 version
 echo "Downloading macOS x86_64 toolchain..."
-curl -L -o "$TEMP_DIR/$MAC_X86_64_FILE" "$XPACK_BASE_URL/$MAC_X86_64_FILE"
+curl -fL --retry 5 --retry-all-errors -o "$TEMP_DIR/$MAC_X86_64_FILE" "$XPACK_BASE_URL/$MAC_X86_64_FILE"
 
 # Download macOS arm64 version
 echo "Downloading macOS arm64 toolchain..."
-curl -L -o "$TEMP_DIR/$MAC_ARM64_FILE" "$XPACK_BASE_URL/$MAC_ARM64_FILE"
+curl -fL --retry 5 --retry-all-errors -o "$TEMP_DIR/$MAC_ARM64_FILE" "$XPACK_BASE_URL/$MAC_ARM64_FILE"
 
 # Clean up existing toolchain directories
 rm -rf toolchain-linux-x86_64/arm-none-eabi
@@ -223,7 +223,7 @@ if [ "$BUILD_MODDABLE_TOOLS" -eq 1 ]; then
         toolchain_dir="${fontbm_pair##*:}"
 
         echo "Overlaying fontbm into $toolchain_dir/moddable-tools from $archive..."
-        curl -L -o "$TEMP_DIR/$archive" "$MODDABLE_BASE_URL/$archive"
+        curl -fL --retry 5 --retry-all-errors -o "$TEMP_DIR/$archive" "$MODDABLE_BASE_URL/$archive"
         unzip -o -j "$TEMP_DIR/$archive" fontbm -d "$toolchain_dir/moddable-tools"
         chmod +x "$toolchain_dir/moddable-tools/fontbm"
     done
@@ -241,7 +241,7 @@ else
         toolchain_dir="${platform_pair##*:}"
 
         echo "Downloading ${archive}..."
-        curl -L -o "$TEMP_DIR/$archive" "$MODDABLE_BASE_URL/$archive"
+        curl -fL --retry 5 --retry-all-errors -o "$TEMP_DIR/$archive" "$MODDABLE_BASE_URL/$archive"
 
         rm -rf "$toolchain_dir/moddable-tools"
         mkdir -p "$toolchain_dir/moddable-tools"
@@ -253,7 +253,7 @@ fi
 
 # fontbm was dropped from lin64 builds after 5.7.0, so overlay fontbm from the older release
 echo "Overlaying lin64 fontbm from Moddable SDK ${MODDABLE_VERSION_LIN64}..."
-curl -L -o "$TEMP_DIR/moddable-tools-lin64-old.zip" "$MODDABLE_BASE_URL_LIN64_OLD/moddable-tools-lin64.zip"
+curl -fL --retry 5 --retry-all-errors -o "$TEMP_DIR/moddable-tools-lin64-old.zip" "$MODDABLE_BASE_URL_LIN64_OLD/moddable-tools-lin64.zip"
 unzip -o -j "$TEMP_DIR/moddable-tools-lin64-old.zip" fontbm -d "toolchain-linux-x86_64/moddable-tools"
 chmod +x "toolchain-linux-x86_64/moddable-tools/fontbm"
 echo "Installed fontbm to toolchain-linux-x86_64/moddable-tools/"

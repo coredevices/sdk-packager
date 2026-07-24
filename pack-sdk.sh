@@ -21,11 +21,18 @@ rm -rf moddable/documentation
 
 rm -rf build/
 rm -rf dist/releases/
+rm -rf moddable/build/bin
+rm -rf moddable/build/tmp
 
 cp -r moddable toolchain-mac-x86_64/moddable
 cp -r moddable toolchain-mac-arm64/moddable
 cp -r moddable toolchain-linux-x86_64/moddable
 cp -r moddable toolchain-linux-aarch64/moddable
+
+rm -rf toolchain-linux-x86_64/moddable/.git
+rm -rf toolchain-linux-aarch64/moddable/.git
+rm -rf toolchain-mac-x86_64/moddable/.git
+rm -rf toolchain-mac-arm64/moddable/.git
 
 PEBBLEOS_PATH=~/Core/pebbleos
 
@@ -36,8 +43,8 @@ configure_and_build_board() {
 
     echo "Building for board: $board (platform: $platform_name, js_engine: $js_engine)"
 
-    ./waf configure --board $board --sdkshell --js-engine $js_engine
-    ./waf build qemu_image_micro qemu_image_spi
+    ./pbl configure --board $board -DCONFIG_SHELL_SDK=y
+    ./pbl build qemu_image_micro qemu_image_spi
     mkdir build/sdk/$platform_name/qemu
     # Ship the firmware ELF as qemu_micro_flash.bin so pebble-tool's -kernel
     # invocation gets a proper vector table (matches `waf qemu_launch`).
