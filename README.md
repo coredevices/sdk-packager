@@ -17,10 +17,15 @@ git clone --recurse-submodules https://github.com/coredevices/sdk-packager
 
 Build an sdk
 ```shell
-./pack-sdk-moddable.sh $VERSION
+./pack-sdk.sh $VERSION
 ```
 
 Run locally
 ```shell
 python3 -m http.server -d dist/
+```
+
+Override SDK server (requires a matching manifest in dist/v1/files/sdk-core)
+```shell
+PEBBLE_SDK_SERVER=http://localhost:8000 pebble sdk install $VERSION
 ```
