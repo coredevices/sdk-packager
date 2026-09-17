@@ -34,7 +34,7 @@ rm -rf toolchain-linux-aarch64/moddable/.git
 rm -rf toolchain-mac-x86_64/moddable/.git
 rm -rf toolchain-mac-arm64/moddable/.git
 
-PEBBLEOS_PATH=~/Core/pebbleos
+PEBBLEOS_PATH=${PEBBLEOS_PATH:-$HOME/Projects/Core/pebbleos}
 
 # On Nix systems, run pebbleos build commands inside the repo's flake dev
 # shell — its shellHook provides the toolchain and activates the venv.
@@ -55,39 +55,46 @@ configure_and_build_board() {
 
     echo "Building for board: $board (platform: $platform_name, js_engine: $js_engine)"
 
-    pbl_run ./pbl configure --board $board -DCONFIG_SHELL_SDK=y
-    pbl_run ./pbl build qemu_image_micro qemu_image_spi
-    mkdir build/sdk/$platform_name/qemu
+    pbl_run pbl configure --board "$board" -DCONFIG_SHELL_SDK=y
+    # The current firmware build exposes SDK packaging as an explicit target;
+    # qemu_image_* only emits the raw flash images in build/.
+    pbl_run pbl build sdk qemu_image_micro qemu_image_spi
+    rm -rf "build/sdk/$platform_name/qemu"
+    mkdir -p "build/sdk/$platform_name/qemu"
     # Ship the firmware ELF as qemu_micro_flash.bin so pebble-tool's -kernel
     # invocation gets a proper vector table (matches `waf qemu_launch`).
     # Loading the flat binary causes timer/audio IRQs to stall the main loop.
-    cp build/pebbleos.elf build/sdk/$platform_name/qemu/qemu_micro_flash.bin
-    mv build/qemu_spi_flash.bin build/sdk/$platform_name/qemu/
-    mv build/pebbleos.elf build/sdk/$platform_name/qemu/"$platform_name"_sdk_debug.elf
-    mv build/resources/layouts.json.auto build/sdk/$platform_name/qemu/layouts.json
-    bzip2 build/sdk/$platform_name/qemu/qemu_spi_flash.bin
+    cp build/pebbleos.elf "build/sdk/$platform_name/qemu/qemu_micro_flash.bin"
+    mv build/qemu_spi_flash.bin "build/sdk/$platform_name/qemu/"
+    mv build/pebbleos.elf "build/sdk/$platform_name/qemu/${platform_name}_sdk_debug.elf"
+    mv build/resources/layouts.json.auto "build/sdk/$platform_name/qemu/layouts.json"
+    bzip2 -f "build/sdk/$platform_name/qemu/qemu_spi_flash.bin"
 }
 
 # Build moddable boards from pebbleos-moddable for now
-cd $PEBBLEOS_PATH
+cd "$PEBBLEOS_PATH"
 [ "$USE_NIX" -eq 1 ] || source .venv/bin/activate
-pbl_run ./waf distclean
+# pbl clean does not remove every SDK packaging artifact; start from a clean
+# build tree so stale platform/qemu directories cannot poison a package.
+rm -rf build
 
 configure_and_build_board "qemu_gabbro" "gabbro" "moddable"
 configure_and_build_board "qemu_emery" "emery" "moddable"
 configure_and_build_board "qemu_flint" "flint" "none"
 cd -
 mkdir sdk-core
-cp -r $PEBBLEOS_PATH/build/sdk sdk-core/pebble
+cp -r "$PEBBLEOS_PATH/build/sdk" sdk-core/pebble
 
-# Build frozen platform SDKs (headers/shims only) using build_sdk.py
-cd $PEBBLEOS_PATH
+# Build frozen platform SDKs (headers/shims only) using build_sdk.py. This
+# keeps the current headers (including newer stubbed APIs) while freezing the
+# ABI revision for legacy platforms.
+cd "$PEBBLEOS_PATH"
 pbl_run python tools/build_sdk.py aplite basalt chalk diorite
 cd -
-cp -r $PEBBLEOS_PATH/build/sdk/aplite sdk-core/pebble/
-cp -r $PEBBLEOS_PATH/build/sdk/basalt sdk-core/pebble/
-cp -r $PEBBLEOS_PATH/build/sdk/chalk sdk-core/pebble/
-cp -r $PEBBLEOS_PATH/build/sdk/diorite sdk-core/pebble/
+cp -r "$PEBBLEOS_PATH/build/sdk/aplite" sdk-core/pebble/
+cp -r "$PEBBLEOS_PATH/build/sdk/basalt" sdk-core/pebble/
+cp -r "$PEBBLEOS_PATH/build/sdk/chalk" sdk-core/pebble/
+cp -r "$PEBBLEOS_PATH/build/sdk/diorite" sdk-core/pebble/
 
 mv sdk-core/pebble/package.json sdk-core/
 mv sdk-core/pebble/use_requirements.json sdk-core/
@@ -102,11 +109,14 @@ cat > sdk-core/manifest.json << EOF
 }
 EOF
 
-# Copy libpebble.a and qemu from old 4.4 SDK for frozen platforms
+# Copy libpebble.a and qemu from old 4.4 SDK for frozen platforms. The
+# regenerated frozen SDK supplies headers/stubs, but the actual app ABI and
+# emulator payload remain the historical frozen ones.
 SDK_4_4_PATH=sdk-core-4.4/sdk-core/pebble
 for platform in aplite basalt chalk diorite; do
-    cp $SDK_4_4_PATH/$platform/lib/libpebble.a sdk-core/pebble/$platform/lib/
-    cp -r $SDK_4_4_PATH/$platform/qemu sdk-core/pebble/$platform/
+    cp "$SDK_4_4_PATH/$platform/lib/libpebble.a" "sdk-core/pebble/$platform/lib/"
+    rm -rf "sdk-core/pebble/$platform/qemu"
+    cp -r "$SDK_4_4_PATH/$platform/qemu" "sdk-core/pebble/$platform/"
 done
 
 mkdir build/
