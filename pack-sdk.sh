@@ -48,76 +48,22 @@ else
     pbl_run() { "$@"; }
 fi
 
-configure_and_build_board() {
-    local board=$1
-    local platform_name=$2
-    local js_engine=$3
+# `pbl sdk` builds every board sdk/boards.yml lists with the SDK shell and
+# its emulator, adds the frozen platforms, and writes the sdk-core tree with
+# its manifest. The libpebble.a and emulator of the frozen platforms are the
+# ones of the 4.4 SDK: they are what those platforms were frozen with.
+FROZEN_PATH="$(pwd)/sdk-core-4.4/sdk-core/pebble"
+SDK_BUILD_PATH="$PEBBLEOS_PATH/build-sdk"
 
-    echo "Building for board: $board (platform: $platform_name, js_engine: $js_engine)"
-
-    pbl_run pbl configure --board "$board" -DCONFIG_SHELL_SDK=y
-    # The current firmware build exposes SDK packaging as an explicit target;
-    # qemu_image_* only emits the raw flash images in build/.
-    pbl_run pbl build sdk qemu_image_micro qemu_image_spi
-    rm -rf "build/sdk/$platform_name/qemu"
-    mkdir -p "build/sdk/$platform_name/qemu"
-    # Ship the firmware ELF as qemu_micro_flash.bin so pebble-tool's -kernel
-    # invocation gets a proper vector table (matches `waf qemu_launch`).
-    # Loading the flat binary causes timer/audio IRQs to stall the main loop.
-    cp build/pebbleos.elf "build/sdk/$platform_name/qemu/qemu_micro_flash.bin"
-    mv build/qemu_spi_flash.bin "build/sdk/$platform_name/qemu/"
-    mv build/pebbleos.elf "build/sdk/$platform_name/qemu/${platform_name}_sdk_debug.elf"
-    mv build/resources/layouts.json.auto "build/sdk/$platform_name/qemu/layouts.json"
-    bzip2 -f "build/sdk/$platform_name/qemu/qemu_spi_flash.bin"
-}
-
-# Build moddable boards from pebbleos-moddable for now
 cd "$PEBBLEOS_PATH"
 [ "$USE_NIX" -eq 1 ] || source .venv/bin/activate
-# pbl clean does not remove every SDK packaging artifact; start from a clean
-# build tree so stale platform/qemu directories cannot poison a package.
-rm -rf build
-
-configure_and_build_board "qemu_gabbro" "gabbro" "moddable"
-configure_and_build_board "qemu_emery" "emery" "moddable"
-configure_and_build_board "qemu_flint" "flint" "none"
+# Start from a clean tree so nothing stale can end up in a package.
+rm -rf "$SDK_BUILD_PATH"
+pbl_run pbl sdk "$SDK_VERSION" --frozen "$FROZEN_PATH"
 cd -
-mkdir sdk-core
-cp -r "$PEBBLEOS_PATH/build/sdk" sdk-core/pebble
 
-# Build frozen platform SDKs (headers/shims only) using build_sdk.py. This
-# keeps the current headers (including newer stubbed APIs) while freezing the
-# ABI revision for legacy platforms.
-cd "$PEBBLEOS_PATH"
-pbl_run python tools/build_sdk.py aplite basalt chalk diorite
-cd -
-cp -r "$PEBBLEOS_PATH/build/sdk/aplite" sdk-core/pebble/
-cp -r "$PEBBLEOS_PATH/build/sdk/basalt" sdk-core/pebble/
-cp -r "$PEBBLEOS_PATH/build/sdk/chalk" sdk-core/pebble/
-cp -r "$PEBBLEOS_PATH/build/sdk/diorite" sdk-core/pebble/
-
-mv sdk-core/pebble/package.json sdk-core/
-mv sdk-core/pebble/use_requirements.json sdk-core/
-mv sdk-core/pebble/requirements.txt sdk-core/
-
-cat > sdk-core/manifest.json << EOF
-{
-    "requirements": $(cat sdk-core/use_requirements.json),
-    "version": "$SDK_VERSION",
-    "type": "sdk-core",
-    "channel": ""
-}
-EOF
-
-# Copy libpebble.a and qemu from old 4.4 SDK for frozen platforms. The
-# regenerated frozen SDK supplies headers/stubs, but the actual app ABI and
-# emulator payload remain the historical frozen ones.
-SDK_4_4_PATH=sdk-core-4.4/sdk-core/pebble
-for platform in aplite basalt chalk diorite; do
-    cp "$SDK_4_4_PATH/$platform/lib/libpebble.a" "sdk-core/pebble/$platform/lib/"
-    rm -rf "sdk-core/pebble/$platform/qemu"
-    cp -r "$SDK_4_4_PATH/$platform/qemu" "sdk-core/pebble/$platform/"
-done
+# -a keeps the links from a platform to the headers and library of its ABI.
+cp -a "$SDK_BUILD_PATH/sdk-core" sdk-core
 
 mkdir build/
 
